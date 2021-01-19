@@ -1,0 +1,110 @@
+version: '3.7'
+
+services:
+  pgquerywatcher:
+    build:
+      context: .
+      dockerfile: .docker/pgquerywatcher.Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./watcher:/app/pgquerywatcher:delegated
+      - ./.docker/entrypoints/dev.sh:/entrypoint.sh:ro
+    entrypoint: /entrypoint.sh
+    ports:
+      - "8080:8080"
+    tty: true
+    depends_on:
+      - target_db
+      - graylog
+    working_dir: /app/pgquerywatcher
+    networks:
+      - pgquerywatcher
+    logging:
+      driver: "gelf"
+      options:
+        gelf-address: "udp://localhost:12201"
+        tag: "first-logs"
+
+  target_db:
+    build:
+      context: .
+      dockerfile: .docker/postgres.Dockerfile
+    environment:
+      - TERM=xterm
+      - LC_COLLATE=ru_RU.UTF-8
+      - LC_CTYPE=ru_RU.UTF-8
+      - POSTGRES_DB=target_db
+      - POSTGRES_USER=target_user
+      - POSTGRES_PASSWORD=target_pass
+      - POSTGRES_INITDB_ARGS="--locale=ru_RU.UTF-8"
+      - PAGER=less
+    expose:
+      - "5432"
+    ports:
+      - "5441:5432"
+    volumes:
+      - target_db:/var/lib/postgresql
+    networks:
+      - pgquerywatcher
+    command: postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all
+
+
+  # MongoDB: https://hub.docker.com/_/mongo/
+  mongo:
+    image: mongo:4.2
+    networks:
+      - graylog
+  # Elasticsearch: https://www.elastic.co/guide/en/elasticsearch/reference/7.10/docker.html
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    networks:
+      - graylog
+  # Graylog: https://hub.docker.com/r/graylog/graylog/
+  graylog:
+    image: graylog/graylog:4.0
+    environment:
+      # CHANGE ME (must be at least 16 characters)!
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      # Password: admin
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+    entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+    networks:
+      - graylog
+    restart: always
+    depends_on:
+      - mongo
+      - elasticsearch
+    ports:
+      # Graylog web interface and REST API
+      - 9000:9000
+      # Syslog TCP
+      - 1514:1514
+      # Syslog UDP
+      - 1514:1514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
+
+volumes:
+  target_db:
+
+networks:
+  pgquerywatcher:
+  graylog:
+    driver: bridge
