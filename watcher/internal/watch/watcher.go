@@ -17,15 +17,15 @@ type Watcher struct {
 }
 
 type PgStatStatementsRow struct {
-	Query     string  `db:"query"`
-	Calls     uint64  `db:"calls"`
-	TotalTime float64 `db:"total_exec_time"`
+	Query     string
+	Calls     uint64
+	TotalTime float64
 }
 
 type QueryStats struct {
-	Time           time.Time `db:"time"`
-	Query          string    `db:"query"`
-	ExecMeanTimeMs float64   `db:"exec_mean_time_ms"`
+	Time           time.Time
+	Query          string
+	ExecMeanTimeMs float64
 }
 
 func NewWatcher(targetDbConfig config.DbConfig, log zerolog.Logger) (*Watcher, error) {
@@ -38,36 +38,38 @@ func NewWatcher(targetDbConfig config.DbConfig, log zerolog.Logger) (*Watcher, e
 }
 
 func (w Watcher) Watch() error {
-
 	previousStatStatements, err := w.getStatStatements()
 	if err != nil {
 		return err
 	}
 
-	for true {
-		time.Sleep(3 * time.Second)
+	for range time.NewTicker(3 * time.Second).C {
 		currentStatStatements, err := w.getStatStatements()
-
 		if err != nil {
 			return err
 		}
 
-		// записываем изменения
 		w.logChanges(currentStatStatements, previousStatStatements)
 		previousStatStatements = currentStatStatements
 	}
 	return nil
 }
 
-func (w Watcher) logChanges(currentStatStatements map[string]PgStatStatementsRow, previousStatStatements map[string]PgStatStatementsRow) {
+func (w Watcher) logChanges(
+	currentStatStatements map[string]PgStatStatementsRow,
+	previousStatStatements map[string]PgStatStatementsRow,
+) {
 	currTime := time.Now()
+
 	for query, curr := range currentStatStatements {
 		if strings.Contains(query, "pg_stat_statements") {
 			continue
 		}
-		prev, exists := previousStatStatements[query]
-		if !exists || prev.Calls > curr.Calls {
-			prev = PgStatStatementsRow{Calls: 0, TotalTime: 0}
+		prev := previousStatStatements[query]
+
+		// if someone reset stats, ignore previous values
+		if prev.Calls > curr.Calls {
+			prev = PgStatStatementsRow{}
 		}
 
 		if curr.Calls == prev.Calls {
@@ -101,7 +103,8 @@ func (w Watcher) getStatStatements() (map[string]PgStatStatementsRow, error) {
 
 	defer rows.Close()
 
-	queriesStats := map[string]PgStatStatementsRow{}
+	queriesStats := make(map[string]PgStatStatementsRow)
+
 	for rows.Next() {
 		var queryStat PgStatStatementsRow
 		err = rows.Scan(&queryStat.Query, &queryStat.Calls, &queryStat.TotalTime)
